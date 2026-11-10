@@ -34,16 +34,22 @@ const streams=new Map();
 function broadcast(g){const msg='data: '+JSON.stringify({game:publicGame(g,'')})+'\n\n';for(const [uid,set] of streams){const u=db.users[uid];if(u?.gameId===g.id){const payload='data: '+JSON.stringify({game:publicGame(g,uid)})+'\n\n';for(const r of set)r.write(payload);}}}
 function incident(g,type,message,by){g.incidents.push({id:token().slice(0,8),type,message,by,at:Date.now()});g.incidents=g.incidents.slice(-100);}
 function shrink(g){
- if(!g.zone||g.status!=='LIVE')return;
- const elapsed=Date.now()-g.roundStartedAt,step=Math.floor(elapsed/180000);
- const radius=Math.max(g.zone.minRadius,g.zone.startRadius*Math.pow(.8,step));
- g.zone.radius=Math.round(radius);g.shrinkAt=g.roundStartedAt+(step+1)*180000;
+ if(!g.zone||g.status!=='LIVE'||!g.roundStartedAt)return false;
+ const elapsed=Math.max(0,Date.now()-g.roundStartedAt);
+ const step=Math.floor(elapsed/180000); // one shrink every 3 minutes
+ const minimum=100; // 100 m radius = 200 m diameter
+ const nextRadius=Math.max(minimum,Math.round(g.zone.startRadius*Math.pow(0.8,step)));
+ const changed=nextRadius!==g.zone.radius;
+ g.zone.minRadius=minimum;
+ g.zone.radius=nextRadius;
+ g.shrinkAt=nextRadius<=minimum?null:g.roundStartedAt+(step+1)*180000;
+ return changed;
 }
 function tick(){
  const now=Date.now();
  for(const g of Object.values(db.games)){
   if(g.status!=='LIVE')continue;
-  shrink(g);
+  const radiusChanged=shrink(g);
   if(now>=g.roundEndsAt){g.status='FINISHED';g.endedAt=now;incident(g,'ROUND END','18-minute round ended.', 'SYSTEM');for(const p of Object.values(g.players))p.status=p.status==='ACTIVE'?'SAFE':'ELIMINATED';broadcast(g);save();continue;}
   let zoneChanged=false;
   for(const p of Object.values(g.players)){
@@ -55,7 +61,7 @@ function tick(){
     if(p.outsideSince&&now-p.outsideSince>=180000){p.status='ELIMINATED';p.outsideSince=null;zoneChanged=true;incident(g,'ZONE ELIMINATION',p.name+' was eliminated for remaining outside the zone.', 'SYSTEM');}
    }
   }
-  if(zoneChanged){save();broadcast(g);}
+  if(zoneChanged||radiusChanged){save();broadcast(g);}
   if(now%5000<1100)broadcast(g);
  }
 }
@@ -80,9 +86,9 @@ async function api(req,res,url){
  if(url.pathname==='/api/me'&&method==='GET')return json(res,200,{user:{id:u.id,name:u.name},game:publicGame(gameOf(u),u.id)});
  if(url.pathname==='/api/host'&&method==='POST'){
   if(u.gameId)return json(res,400,{error:'Leave your current game first.'});
-  const b=await body(req),name=String(b.name||'Vegas Incident').trim().slice(0,50),lat=Number(b.lat),lng=Number(b.lng),radius=Math.max(250,Math.min(1000,Number(b.radius)||1000));
+  const b=await body(req),name=String(b.name||'Vegas Incident').trim().slice(0,50),lat=Number(b.lat),lng=Number(b.lng),radius=Math.max(100,Math.min(1000,Number(b.radius)||1000));
   if(!Number.isFinite(lat)||!Number.isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180)return json(res,400,{error:'Set the game centre using your location or map coordinates.'});
-  const gid=token(),g={id:gid,code:code(),name,hostId:u.id,status:'LOBBY',createdAt:Date.now(),roundStartedAt:null,roundEndsAt:null,zone:{center:{lat,lng},startRadius:radius,minRadius:150,radius},shrinkAt:null,players:{},incidents:[]};
+  const gid=token(),g={id:gid,code:code(),name,hostId:u.id,status:'LOBBY',createdAt:Date.now(),roundStartedAt:null,roundEndsAt:null,zone:{center:{lat,lng},startRadius:radius,minRadius:100,radius},shrinkAt:null,players:{},incidents:[]};
   g.players[u.id]={id:u.id,name:u.name,role:'HUNTER',status:'ACTIVE',targetId:null,location:null,lastPing:null,outsideSince:null};db.games[gid]=g;u.gameId=gid;incident(g,'GAME CREATED',u.name+' opened the lobby.','SYSTEM');save();return json(res,200,{game:publicGame(g,u.id)});
  }
  if(url.pathname==='/api/join'&&method==='POST'){
@@ -95,6 +101,50 @@ async function api(req,res,url){
   const ps=Object.values(g.players);if(ps.length<2)return json(res,400,{error:'At least two players are required.'});
   const hunterCount=Math.max(1,Math.floor(ps.length/4));const shuffled=[...ps].sort(()=>Math.random()-.5);const hunters=new Set(shuffled.slice(0,hunterCount).map(p=>p.id));for(const p of ps){p.role=hunters.has(p.id)?'HUNTER':'HIDER';p.status='ACTIVE';p.targetId=null;p.catchCode=p.role==='HIDER'?String(crypto.randomInt(100000,1000000)):null;}
   g.status='LIVE';g.roundStartedAt=Date.now();g.roundEndsAt=g.roundStartedAt+18*60000;g.shrinkAt=g.roundStartedAt+180000;const hunterNames=ps.filter(p=>hunters.has(p.id)).map(p=>p.name).join(', ');incident(g,'ROUND START',hunterNames+' assigned as hunter(s). The round is live.','SYSTEM');save();broadcast(g);return json(res,200,{game:publicGame(g,u.id)});
+ }
+ if(url.pathname==='/api/control'&&method==='POST'){
+  const g=gameOf(u),b=await body(req);
+  if(!g||g.hostId!==u.id)return json(res,403,{error:'Only the game host can control the round.'});
+  if(b.action==='pause'&&g.status==='LIVE'){g.status='PAUSED';g.pausedAt=Date.now();incident(g,'GAME PAUSED','The host paused the game.',u.name);save();broadcast(g);return json(res,200,{ok:true,game:publicGame(g,u.id)});}
+  if(b.action==='resume'&&g.status==='PAUSED'){const d=Date.now()-(g.pausedAt||Date.now());g.roundStartedAt+=d;g.roundEndsAt+=d;g.shrinkAt+=d;g.status='LIVE';g.pausedAt=null;incident(g,'GAME RESUMED','The host resumed the game.',u.name);save();broadcast(g);return json(res,200,{ok:true,game:publicGame(g,u.id)});}
+  if(b.action==='end'&&(g.status==='LIVE'||g.status==='PAUSED')){g.status='FINISHED';g.endedAt=Date.now();g.pausedAt=null;for(const p of Object.values(g.players))if(p.status==='ACTIVE')p.status='SAFE';incident(g,'GAME ENDED','The host ended the game.',u.name);save();broadcast(g);return json(res,200,{ok:true,game:publicGame(g,u.id)});}
+  return json(res,400,{error:'That control is not available right now.'});
+ }
+ if(url.pathname==='/api/location'&&method==='POST'){
+  const g=gameOf(u),p=player(g,u.id),b=await body(req);if(!g||g.status!=='LIVE'||!p||p.status!=='ACTIVE')return json(res,400,{error:'No active round.'});
+  const lat=Number(b.lat),lng=Number(b.lng);if(!Number.isFinite(lat)||!Number.isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180)return json(res,400,{error:'Invalid coordinates.'});
+  const now=Date.now();if(p.role==='HIDER'&&p.lastPing&&now-p.lastPing<175000)return json(res,429,{error:'Hiders can ping once every 3 minutes.'});
+  p.location={lat,lng,at:now};p.lastPing=now;save();broadcast(g);return json(res,200,{ok:true});
+ }
+ if(url.pathname==='/api/report'&&method==='POST'){
+  const g=gameOf(u),b=await body(req);if(!g)return json(res,400,{error:'Join a game first.'});incident(g,String(b.type||'REPORT').slice(0,20),String(b.message||'').slice(0,250),u.name);save();broadcast(g);return json(res,200,{ok:true});
+ }
+ if(url.pathname==='/api/tag'&&method==='POST'){
+  const g=gameOf(u),b=await body(req);if(!g||g.status!=='LIVE'||player(g,u.id)?.role!=='HUNTER')return json(res,403,{error:'Only the hunter can submit a tag.'});
+  const target=player(g,String(b.targetId||''));if(!target||target.role!=='HIDER'||target.status!=='ACTIVE')return json(res,400,{error:'Invalid target.'});
+  const submitted=String(b.code||'').trim();
+  if(!target.catchCode||submitted!==target.catchCode)return json(res,403,{error:'Incorrect catch code. Ask the hider for the code they see on their screen.'});
+  target.status='ELIMINATED';incident(g,'TAG CONFIRMED',target.name+' confirmed caught by hunter.',u.name);save();broadcast(g);return json(res,200,{ok:true});
+ }
+ if(url.pathname==='/api/leave'&&method==='POST'){
+  const g=gameOf(u);if(g){if(g.status==='LOBBY')delete g.players[u.id];else{const p=player(g,u.id);if(p)p.status='LEFT';}u.gameId=null;save();broadcast(g);}return json(res,200,{ok:true});
+ }
+ if(url.pathname==='/api/state'&&method==='GET'){const g=gameOf(u);return json(res,200,{game:publicGame(g,u.id)});}
+ if(url.pathname==='/api/events'&&method==='GET'){
+  const g=gameOf(u);if(!g)return json(res,400,{error:'Join a game first.'});
+  res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache','connection':'keep-alive'});res.write('data: '+JSON.stringify({game:publicGame(g,u.id)})+'\n\n');
+  if(!streams.has(u.id))streams.set(u.id,new Set());streams.get(u.id).add(res);req.on('close',()=>streams.get(u.id)?.delete(res));return;
+ }
+ return json(res,404,{error:'Not found.'});
+}
+const PAGE=String.raw`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MANHUNT — The Vegas Incident</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>
+:root{--bg:#09090b;--panel:#141419;--line:#303039;--red:#e43d42;--gold:#d6ad65;--muted:#9999a3;--white:#f3f0e9}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% -10%,#42191d,transparent 35%),var(--bg);color:var(--white);font:14px/1.5 system-ui,Arial}button,input{font:inherit}button{cursor:pointer;background:#202027;color:white;border:1px solid var(--line);border-radius:8px;padding:11px 14px;font-weight:750}button.primary{background:var(--red);border-color:var(--red)}input{width:100%;background:#09090c;color:white;border:1px solid var(--line);border-radius:8px;padding:12px;margin:5px 0 10px}.top{padding:16px 4vw;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:#09090bee;z-index:9}.brand{font-size:20px;font-weight:1000;letter-spacing:.16em}.brand span,h1 em{color:var(--red)}.edition,.eyebrow,small{color:var(--gold);letter-spacing:.18em;font-size:10px}main{max-width:1400px;margin:auto;padding:28px 4vw}.hero{display:flex;justify-content:space-between;gap:15px;align-items:end}.hero h1{font-size:clamp(36px,6vw,64px);line-height:.95;margin:10px 0}.sub{color:var(--muted)}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:20px 0}.stat,.panel{background:linear-gradient(145deg,#19191f,#111115);border:1px solid var(--line);border-radius:12px;padding:15px}.stat label{font-size:10px;color:var(--muted);letter-spacing:.13em}.stat b{display:block;font-size:24px}.layout{display:grid;grid-template-columns:1fr 310px;gap:14px}#map{height:520px;border-radius:0 0 12px 12px}.panelhead{display:flex;justify-content:space-between;padding:2px 0 12px}.side{display:flex;flex-direction:column;gap:12px}.side h3{font-size:11px;letter-spacing:.15em;margin:0 0 12px}.muted{color:var(--muted);font-size:12px}.row{display:flex;gap:8px}.row>*{flex:1}.wide{width:100%;margin-top:7px}.player,.feed{padding:9px 0;border-top:1px solid var(--line);font-size:12px}.pill{color:var(--gold);font-size:10px}.hidden{display:none!important}.auth{max-width:440px;margin:35px auto}.auth h2{margin-bottom:4px}.actions{display:flex;gap:8px;flex-wrap:wrap}.warn{color:#ffbd72}.good{color:#83dfa0}.zone-alert{display:none;margin:12px 0;padding:14px 16px;border:2px solid #ff343b;border-radius:10px;background:#4a1015;color:#fff;font-weight:900;font-size:16px;letter-spacing:.04em}.zone-alert.on{display:block;animation:zonePulse 1s infinite alternate}@keyframes zonePulse{from{box-shadow:0 0 4px #e43d42}to{box-shadow:0 0 22px #e43d42}}.you-marker{width:26px;height:26px;border-radius:50%;background:#16C784;border:4px solid white;box-shadow:0 0 0 7px #16C78466,0 0 20px #16C784;position:relative}.you-marker:after{content:'YOU ARE HERE';position:absolute;left:30px;top:0;white-space:nowrap;background:#16C784;color:#071b12;padding:3px 7px;border-radius:4px;font:bold 10px Arial}.hunter-marker{width:25px;height:25px;border-radius:50%;background:#005BFF;border:4px solid white;box-shadow:0 0 0 7px #005BFF66,0 0 18px #005BFF}.hider-marker{width:15px;height:15px;border-radius:50%;background:#e3b65f;border:3px solid white;box-shadow:0 0 0 4px #e3b65f55}footer{color:#777;font-size:10px;margin-top:18px}@media(max-width:850px){.layout{grid-template-columns:1fr}.side{display:grid;grid-template-columns:1fr 1fr}#map{height:420px}}@media(max-width:560px){.stats{grid-template-columns:1fr 1fr}.hero{display:block}.side{display:flex}.top{padding:12px 4vw}#map{height:380px}}
+</style></head><body><header class="top"><div><div class="brand">MAN<span>HUNT</span></div><div class="edition">THE VEGAS INCIDENT · FIELD OPERATIONS</div></div><div class="actions"><button id="logout" class="hidden" onclick="act('/api/logout',{})">LOG OUT</button></div></header><main>
+<section id="auth" class="panel auth"><div class="eyebrow">FIELD OPERATIONS</div><h2>ENTER THE HUNT</h2><p class="muted">Create an account or sign in. Location is never shared until you enable it.</p><div id="authFields"><input id="name" placeholder="Callsign / name"><input id="email" type="email" placeholder="Email"><input id="password" type="password" placeholder="Password (8+ characters)"></div><div class="row"><button class="primary" onclick="auth('register')">CREATE ACCOUNT</button><button onclick="auth('login')">SIGN IN</button></div><p id="authMsg" class="muted"></p></section>
+<section id="app" class="hidden"><div class="hero"><div><div class="eyebrow">FIELD OPERATIONS · AFTER DARK</div><h1>ONE CITY.<br><em>NO ALIBIS.</em></h1><div class="sub" id="gameName">Create a lobby or join with a code.</div></div><div id="roundClock" class="hidden"><b id="timer" style="font-size:28px">18:00</b><br><small>ROUND TIME REMAINING</small></div></div>
+<div id="zoneAlert" class="zone-alert" role="alert"></div><div id="statsBar" class="stats hidden"><div class="stat"><label>ACTIVE PLAYERS</label><b id="active">—</b></div><div class="stat"><label>HIDERS AT LARGE</label><b id="hiders">—</b></div><div class="stat"><label>ELIMINATIONS</label><b id="out">—</b></div><div class="stat"><label>YOUR ROLE</label><b id="role">—</b></div></div>
+<div class="layout"><div class="panel" style="padding:12px"><div class="panelhead"><b>OPERATIONS MAP</b><span id="mapMode" class="muted">LOBBY</span></div><div id="map"></div><p class="muted">Zone shrinks 20% every 3 minutes to a 100 m minimum radius. Hiders ping every 3 minutes; hunter updates every 5 seconds. GPS sharing is opt-in.</p></div><aside class="side">
+<div class="panel"><h3>GAME CONTROL</h3><div id="lobbyControls"><input id="gameTitle" placeholder="Game name"><input id="radius" type="number" min="100" max="1000" value="1000" placeholder="Starting zone radius (m) · max 1,000 m"><button cve.','SYSTEM');save();broadcast(g);return json(res,200,{game:publicGame(g,u.id)});
  }
  if(url.pathname==='/api/control'&&method==='POST'){
   const g=gameOf(u),b=await body(req);
