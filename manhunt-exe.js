@@ -132,7 +132,7 @@ const $=x=>document.getElementById(x);
 async function req(url,data){let r=await fetch(url,{method:data?'POST':'GET',headers:data?{'content-type':'application/json'}:{},body:data?JSON.stringify(data):undefined});let j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j}
 async function auth(kind){try{let j=await req('/api/'+kind,{name:$('name').value,email:$('email').value,password:$('password').value});me=j.user;showApp();}catch(e){$('authMsg').textContent=e.message}}
 async function boot(){try{let j=await req('/api/me');me=j.user;G=j.game;showApp();if(G)render(G);else showLobby();}catch{}}
-function showApp(){$('auth').classList.add('hidden');$('app').classList.remove('hidden');$('logout').classList.remove('hidden');if(!map){map=L.map('map').setView([20,0],2);L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap © CARTO',subdomains:'abcd'}).addTo(map)}}
+function showApp(){$('auth').classList.add('hidden');$('app').classList.remove('hidden');$('logout').classList.remove('hidden');if(!map){map=L.map('map').setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>',maxZoom:19}).addTo(map)}}
 function showLobby(){$('lobbyControls').classList.remove('hidden');$('hostControls').classList.add('hidden');$('liveControls').classList.add('hidden')}
 async function hostGame(){try{let pos=await gpsOnce();let j=await req('/api/host',{name:$('gameTitle').value||'Vegas Incident',lat:pos.coords.latitude,lng:pos.coords.longitude,radius:Number($('radius').value)||1500});G=j.game;render(G);connectEvents()}catch(e){alert(e.message)}}
 async function joinGame(){try{let j=await req('/api/join',{code:$('joinCode').value,callsign:$('callsign').value});G=j.game;render(G);connectEvents()}catch(e){alert(e.message)}}
@@ -161,4 +161,3 @@ const server=http.createServer(async(req,res)=>{
  res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':"default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' https: data: blob:; connect-src 'self' https:;"});res.end(PAGE);
 });
 server.listen(PORT,HOST,()=>console.log(`MANHUNT running on http://${HOST}:${PORT}`));
-
