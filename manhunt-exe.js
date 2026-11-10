@@ -3,7 +3,7 @@
  * MANHUNT — THE VEGAS INCIDENT
  * Single-file Node.js application. Node 22+; no npm dependencies.
  * Run: node server.js
- * Render: set Start Command to `node server.js`; attach a persistent disk at /var/data.
+ * Render: set Start Command to `node manhunt-exe.js`. For account/game data to survive restarts, configure a persistent disk or external database.
  */
 const http=require('node:http'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {URL}=require('node:url');
@@ -19,7 +19,9 @@ const code=()=>crypto.randomBytes(3).toString('hex').toUpperCase();
 const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const json=(res,status,obj)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','access-control-allow-origin':'same-origin'});res.end(JSON.stringify(obj));};
 function body(req){return new Promise((resolve,reject)=>{let s='';req.on('data',c=>{s+=c;if(s.length>1e6)reject(Error('Request too large'));});req.on('end',()=>{try{resolve(s?JSON.parse(s):{});}catch{reject(Error('Invalid JSON'));}});});}
-function userFor(req){const t=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('mh='))?.slice(3);return t?db.sessions[t]||null:null;}
+function sessionSig(uid,user){return crypto.createHmac('sha256',user.password).update('manhunt-session:'+uid).digest('hex');}
+function setLoginCookie(res,uid,user){const value=uid+'.'+sessionSig(uid,user);res.setHeader('set-cookie',`mh=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`);}
+function userFor(req){const raw=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('mh='))?.slice(3);if(!raw)return null;const dot=raw.lastIndexOf('.');if(dot<1)return null;const uid=raw.slice(0,dot),sig=raw.slice(dot+1),user=db.users[uid];if(!user)return null;const expected=sessionSig(uid,user);return sig.length===expected.length&&crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(expected))?uid:null;}
 function current(req){const id=userFor(req);return id?db.users[id]||null:null;}
 function gameOf(user){return user?.gameId?db.games[user.gameId]||null:null;}
 function player(game,id){return game?.players?.[id]||null;}
@@ -66,14 +68,14 @@ async function api(req,res,url){
   const b=await body(req),name=String(b.name||'').trim().slice(0,24),email=String(b.email||'').trim().toLowerCase(),pass=String(b.password||'');
   if(!name||!email||pass.length<8)return json(res,400,{error:'Name, email and password (8+ characters) required.'});
   if(Object.values(db.users).some(x=>x.email===email))return json(res,409,{error:'Email already registered.'});
-  const uid=token(),salt=token();db.users[uid]={id:uid,name,email,salt,password:hash(pass,salt),gameId:null};const t=token();db.sessions[t]=uid;save();res.setHeader('set-cookie',`mh=${t}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`);return json(res,200,{user:{id:uid,name}});
+  const uid=token(),salt=token();db.users[uid]={id:uid,name,email,salt,password:hash(pass,salt),gameId:null};save();setLoginCookie(res,uid,db.users[uid]);return json(res,200,{user:{id:uid,name}});
  }
  if(url.pathname==='/api/login'&&method==='POST'){
   const b=await body(req),email=String(b.email||'').toLowerCase(),pass=String(b.password||''),entry=Object.values(db.users).find(x=>x.email===email);
   if(!entry||hash(pass,entry.salt)!==entry.password)return json(res,401,{error:'Incorrect email or password.'});
-  const t=token();db.sessions[t]=entry.id;save();res.setHeader('set-cookie',`mh=${t}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`);return json(res,200,{user:{id:entry.id,name:entry.name}});
+  setLoginCookie(res,entry.id,entry);return json(res,200,{user:{id:entry.id,name:entry.name}});
  }
- if(url.pathname==='/api/logout'&&method==='POST'){if(id)delete db.sessions[(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('mh='))?.slice(3)];res.setHeader('set-cookie','mh=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0');return json(res,200,{ok:true});}
+ if(url.pathname==='/api/logout'&&method==='POST'){res.setHeader('set-cookie','mh=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0');return json(res,200,{ok:true});}
  if(url.pathname.startsWith('/api/')&&!u)return json(res,401,{error:'Sign in first.'});
  if(url.pathname==='/api/me'&&method==='GET')return json(res,200,{user:{id:u.id,name:u.name},game:publicGame(gameOf(u),u.id)});
  if(url.pathname==='/api/host'&&method==='POST'){
