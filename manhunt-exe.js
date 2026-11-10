@@ -13,15 +13,6 @@ fs.mkdirSync(DATA_DIR,{recursive:true});
 let db={users:{},games:{},sessions:{}};
 try{if(fs.existsSync(DB))db=JSON.parse(fs.readFileSync(DB,'utf8'));}catch(e){console.error('Could not read data file:',e.message);}
 const save=()=>{const tmp=DB+'.tmp';fs.writeFileSync(tmp,JSON.stringify(db,null,2));fs.renameSync(tmp,DB);};
-// One-time database reset for Render's free plan (trigger with RESET_ACCOUNTS=true).
-// The marker prevents repeated wipes while the environment variable is being removed.
-const RESET_MARKER=path.join(DATA_DIR,'.manhunt-reset-complete');
-if(process.env.RESET_ACCOUNTS==='true'&&!fs.existsSync(RESET_MARKER)){
- db={users:{},games:{},sessions:{}};
- save();
- fs.writeFileSync(RESET_MARKER,new Date().toISOString(),'utf8');
- console.log('MANHUNT RESET COMPLETE: all accounts, sessions and games cleared.');
-}
 const hash=(s,salt)=>crypto.scryptSync(s,salt,64).toString('hex');
 const token=()=>crypto.randomBytes(32).toString('hex');
 const code=()=>crypto.randomBytes(3).toString('hex').toUpperCase();
