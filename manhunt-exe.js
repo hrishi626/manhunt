@@ -1,7 +1,4 @@
-import pypandoc
-from pathlib import Path
-
-content = r'''#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * MANHUNT — THE VEGAS INCIDENT
  * Single-file Node.js application. Node 22+; no npm dependencies.
@@ -31,42 +28,20 @@ function player(game,id){return game?.players?.[id]||null;}
 function publicGame(g,uid){
  if(!g)return null;
  const me=player(g,uid),isHunter=me?.role==='HUNTER',isHider=me?.role==='HIDER';
- const rankings=Object.values(g.players).map(p=>({id:p.id,name:p.name,role:p.role,status:p.status,rank:p.rank||null}));
- return {id:g.id,code:g.code,name:g.name,status:g.status,hostId:g.hostId,createdAt:g.createdAt,roundEndsAt:g.roundEndsAt,roundStartedAt:g.roundStartedAt,hideStartedAt:g.hideStartedAt||null,hideEndsAt:g.hideEndsAt||null,pausedAt:g.pausedAt||null,endedAt:g.endedAt||null,winner:g.winner||null,endReason:g.endReason||null,rankings,zone:g.zone,shrinkAt:g.shrinkAt,players:Object.values(g.players).map(p=>{const visible=p.id===uid||(g.status!=='HIDING'&&(isHunter||(isHider&&(p.role==='HIDER'||p.role==='HUNTER'))));return {id:p.id,name:p.name,role:g.status==='LOBBY'?null:p.role,status:p.status,lastPing:p.lastPing,location:visible?p.location:null,outsideSince:p.id===uid||isHunter?p.outsideSince:null};}),me:me?{id:me.id,name:me.name,role:g.status==='LOBBY'?null:me.role,status:me.status,targetId:me.targetId,catchCode:me.role==='HIDER'?me.catchCode:null,outsideSince:me.outsideSince||null}:null,incidents:g.incidents.slice(-30)};
+ return {id:g.id,code:g.code,name:g.name,status:g.status,hostId:g.hostId,createdAt:g.createdAt,roundEndsAt:g.roundEndsAt,roundStartedAt:g.roundStartedAt,hideStartedAt:g.hideStartedAt||null,hideEndsAt:g.hideEndsAt||null,pausedAt:g.pausedAt||null,endedAt:g.endedAt||null,zone:g.zone,shrinkAt:g.shrinkAt,players:Object.values(g.players).map(p=>{const visible=p.id===uid||(g.status!=='HIDING'&&(isHunter||(isHider&&(p.role==='HIDER'||p.role==='HUNTER'))));return {id:p.id,name:p.name,role:g.status==='LOBBY'?null:p.role,status:p.status,lastPing:p.lastPing,location:visible?p.location:null,outsideSince:p.id===uid||isHunter?p.outsideSince:null};}),me:me?{id:me.id,name:me.name,role:g.status==='LOBBY'?null:me.role,status:me.status,targetId:me.targetId,catchCode:me.role==='HIDER'?me.catchCode:null,outsideSince:me.outsideSince||null}:null,incidents:g.incidents.slice(-30)};
 }
 const streams=new Map();
-function broadcast(g){for(const [uid,set] of streams){const u=db.users[uid];if(u?.gameId===g.id){const payload='data: '+JSON.stringify({game:publicGame(g,uid)})+'\n\n';for(const r of set){try{r.write(payload)}catch(e){}}}}}
+function broadcast(g){const msg='data: '+JSON.stringify({game:publicGame(g,'')})+'\n\n';for(const [uid,set] of streams){const u=db.users[uid];if(u?.gameId===g.id){const payload='data: '+JSON.stringify({game:publicGame(g,uid)})+'\n\n';for(const r of set)r.write(payload);}}}
 function incident(g,type,message,by){g.incidents.push({id:token().slice(0,8),type,message,by,at:Date.now()});g.incidents=g.incidents.slice(-100);}
-function finishGame(g,winner,reason,now=Date.now()){
- if(g.status==='FINISHED')return false;
- const players=Object.values(g.players);
- const hiders=players.filter(p=>p.role==='HIDER');
- const survivors=hiders.filter(p=>p.status==='ACTIVE');
- const eliminated=hiders.filter(p=>p.status==='ELIMINATED'||p.status==='LEFT').sort((a,b)=>(b.eliminatedAt||0)-(a.eliminatedAt||0));
- let rank=1;
- for(const p of survivors)p.rank=rank;
- if(survivors.length)rank=2;
- for(const p of eliminated)p.rank=rank++;
- for(const p of players.filter(p=>p.role==='HUNTER'))p.rank=winner==='HUNTERS'?1:null;
- for(const p of players)if(p.status==='ACTIVE')p.status='SAFE';
- g.status='FINISHED';g.endedAt=now;g.pausedAt=null;g.winner=winner;g.endReason=reason;
- incident(g,'GAME OVER',winner==='HUNTERS'?'HUNTERS WIN. Every hider has been eliminated.':winner==='HIDERS'?'HIDERS WIN. At least one hider survived until time expired.':'The host ended the game. No winner declared.','SYSTEM');
- save();broadcast(g);return true;
-}
-function checkLastHider(g,now=Date.now()){
- if(g.status!=='LIVE')return false;
- const remaining=Object.values(g.players).filter(p=>p.role==='HIDER'&&p.status==='ACTIVE');
- if(remaining.length===0)return finishGame(g,'HUNTERS','ALL_HIDERS_ELIMINATED',now);
- return false;
-}
 function shrink(g){
  if(!g.zone||g.status!=='LIVE'||!g.roundStartedAt)return false;
  const elapsed=Math.max(0,Date.now()-g.roundStartedAt);
- const step=Math.floor(elapsed/180000);
- const minimum=100;
+ const step=Math.floor(elapsed/180000); // one shrink every 3 minutes
+ const minimum=100; // 100 m radius = 200 m diameter
  const nextRadius=Math.max(minimum,Math.round(g.zone.startRadius*Math.pow(0.8,step)));
  const changed=nextRadius!==g.zone.radius;
- g.zone.minRadius=minimum;g.zone.radius=nextRadius;
+ g.zone.minRadius=minimum;
+ g.zone.radius=nextRadius;
  g.shrinkAt=nextRadius<=minimum?null:g.roundStartedAt+(step+1)*180000;
  return changed;
 }
@@ -77,28 +52,23 @@ function tick(){
    if(now>=g.hideEndsAt){
     g.status='LIVE';g.roundStartedAt=now;g.roundEndsAt=now+18*60000;g.shrinkAt=now+180000;
     incident(g,'HUNT BEGINS','The 2-minute hiding period is over. The 18-minute round is live.','SYSTEM');
-    save();broadcast(g);checkLastHider(g,now);
+    save();broadcast(g);
    }
    continue;
   }
   if(g.status!=='LIVE')continue;
   const radiusChanged=shrink(g);
-  if(now>=g.roundEndsAt){
-   const survivors=Object.values(g.players).filter(p=>p.role==='HIDER'&&p.status==='ACTIVE');
-   finishGame(g,survivors.length?'HIDERS':'HUNTERS','ROUND_TIMER_EXPIRED',now);
-   continue;
-  }
+  if(now>=g.roundEndsAt){g.status='FINISHED';g.endedAt=now;incident(g,'ROUND END','18-minute round ended.', 'SYSTEM');for(const p of Object.values(g.players))p.status=p.status==='ACTIVE'?'SAFE':'ELIMINATED';broadcast(g);save();continue;}
   let zoneChanged=false;
   for(const p of Object.values(g.players)){
    if(p.status!=='ACTIVE'||!p.location)continue;
    if(p.role==='HIDER'){
     const outside=distance(p.location,g.zone.center)>g.zone.radius;
-    if(outside&&!p.outsideSince){p.outsideSince=now;zoneChanged=true;incident(g,'ZONE WARNING',p.name+' left the shrinking zone. Return within 3 minutes.','SYSTEM');}
-    if(!outside&&p.outsideSince){p.outsideSince=null;zoneChanged=true;incident(g,'ZONE RETURN',p.name+' returned inside the zone.','SYSTEM');}
-    if(p.outsideSince&&now-p.outsideSince>=180000){p.status='ELIMINATED';p.eliminatedAt=now;p.outsideSince=null;zoneChanged=true;incident(g,'ZONE ELIMINATION',p.name+' was eliminated for remaining outside the zone.','SYSTEM');}
+    if(outside&&!p.outsideSince){p.outsideSince=now;zoneChanged=true;incident(g,'ZONE WARNING',p.name+' left the shrinking zone. Return within 3 minutes.', 'SYSTEM');}
+    if(!outside&&p.outsideSince){p.outsideSince=null;zoneChanged=true;incident(g,'ZONE RETURN',p.name+' returned inside the zone.', 'SYSTEM');}
+    if(p.outsideSince&&now-p.outsideSince>=180000){p.status='ELIMINATED';p.outsideSince=null;zoneChanged=true;incident(g,'ZONE ELIMINATION',p.name+' was eliminated for remaining outside the zone.', 'SYSTEM');}
    }
   }
-  if(checkLastHider(g,now))continue;
   if(zoneChanged||radiusChanged){save();broadcast(g);}
   if(now%5000<1100)broadcast(g);
  }
@@ -111,8 +81,10 @@ async function api(req,res,url){
  if(url.pathname==='/api/guest'&&method==='POST'){
   const b=await body(req),name=String(b.name||'').trim().slice(0,24)||'PLAYER';
   if(u)return json(res,200,{user:{id:u.id,name:u.name},game:publicGame(gameOf(u),u.id)});
-  const uid=token(),secret=token();db.users[uid]={id:uid,name,password:secret,gameId:null,guest:true};
-  save();setLoginCookie(res,uid,db.users[uid]);return json(res,200,{user:{id:uid,name},game:null});
+  const uid=token(),secret=token();
+  db.users[uid]={id:uid,name,password:secret,gameId:null,guest:true};
+  save();setLoginCookie(res,uid,db.users[uid]);
+  return json(res,200,{user:{id:uid,name},game:null});
  }
  if(url.pathname.startsWith('/api/')&&!u)return json(res,401,{error:'Session expired. Refresh the page to rejoin.'});
  if(url.pathname==='/api/me'&&method==='GET')return json(res,200,{user:{id:u.id,name:u.name},game:publicGame(gameOf(u),u.id)});
@@ -131,17 +103,15 @@ async function api(req,res,url){
  if(url.pathname==='/api/start'&&method==='POST'){
   const g=gameOf(u);if(!g||g.hostId!==u.id)return json(res,403,{error:'Host only.'});if(g.status!=='LOBBY')return json(res,400,{error:'Game already started.'});
   const ps=Object.values(g.players);if(ps.length<2)return json(res,400,{error:'At least two players are required.'});
-  const hunterCount=Math.max(1,Math.floor(ps.length/4));const shuffled=[...ps];for(let i=shuffled.length-1;i>0;i--){const j=crypto.randomInt(i+1);[shuffled[i],shuffled[j]]=[shuffled[j],shuffled[i]];}const hunters=new Set(shuffled.slice(0,hunterCount).map(p=>p.id));
-  for(const p of ps){p.role=hunters.has(p.id)?'HUNTER':'HIDER';p.status='ACTIVE';p.targetId=null;p.location=null;p.lastPing=null;p.outsideSince=null;p.eliminatedAt=null;p.rank=null;p.catchCode=p.role==='HIDER'?String(crypto.randomInt(100000,1000000)):null;}
-  g.winner=null;g.endReason=null;g.status='HIDING';g.hideStartedAt=Date.now();g.hideEndsAt=g.hideStartedAt+2*60000;g.roundStartedAt=null;g.roundEndsAt=null;g.shrinkAt=null;
-  const hunterNames=ps.filter(p=>hunters.has(p.id)).map(p=>p.name).join(', ');incident(g,'HIDING PHASE',hunterNames+' assigned as hunter(s). Hiders have 2 minutes to hide.','SYSTEM');save();broadcast(g);return json(res,200,{game:publicGame(g,u.id)});
+  const hunterCount=Math.max(1,Math.floor(ps.length/4));const shuffled=[...ps];for(let i=shuffled.length-1;i>0;i--){const j=crypto.randomInt(i+1);[shuffled[i],shuffled[j]]=[shuffled[j],shuffled[i]];}const hunters=new Set(shuffled.slice(0,hunterCount).map(p=>p.id));for(const p of ps){p.role=hunters.has(p.id)?'HUNTER':'HIDER';p.status='ACTIVE';p.targetId=null;p.location=null;p.lastPing=null;p.outsideSince=null;p.catchCode=p.role==='HIDER'?String(crypto.randomInt(100000,1000000)):null;}
+  g.status='HIDING';g.hideStartedAt=Date.now();g.hideEndsAt=g.hideStartedAt+2*60000;g.roundStartedAt=null;g.roundEndsAt=null;g.shrinkAt=null;const hunterNames=ps.filter(p=>hunters.has(p.id)).map(p=>p.name).join(', ');incident(g,'HIDING PHASE',hunterNames+' assigned as hunter(s). Hiders have 2 minutes to hide.','SYSTEM');save();broadcast(g);return json(res,200,{game:publicGame(g,u.id)});
  }
  if(url.pathname==='/api/control'&&method==='POST'){
   const g=gameOf(u),b=await body(req);
   if(!g||g.hostId!==u.id)return json(res,403,{error:'Only the game host can control the round.'});
   if(b.action==='pause'&&g.status==='LIVE'){g.status='PAUSED';g.pausedAt=Date.now();incident(g,'GAME PAUSED','The host paused the game.',u.name);save();broadcast(g);return json(res,200,{ok:true,game:publicGame(g,u.id)});}
   if(b.action==='resume'&&g.status==='PAUSED'){const d=Date.now()-(g.pausedAt||Date.now());g.roundStartedAt+=d;g.roundEndsAt+=d;g.shrinkAt+=d;g.status='LIVE';g.pausedAt=null;incident(g,'GAME RESUMED','The host resumed the game.',u.name);save();broadcast(g);return json(res,200,{ok:true,game:publicGame(g,u.id)});}
-  if(b.action==='end'&&(g.status==='HIDING'||g.status==='LIVE'||g.status==='PAUSED')){finishGame(g,'NONE','HOST_ENDED');return json(res,200,{ok:true,game:publicGame(g,u.id)});}
+  if(b.action==='end'&&(g.status==='HIDING'||g.status==='LIVE'||g.status==='PAUSED')){g.status='FINISHED';g.endedAt=Date.now();g.pausedAt=null;for(const p of Object.values(g.players))if(p.status==='ACTIVE')p.status='SAFE';incident(g,'GAME ENDED','The host ended the game.',u.name);save();broadcast(g);return json(res,200,{ok:true,game:publicGame(g,u.id)});}
   return json(res,400,{error:'That control is not available right now.'});
  }
  if(url.pathname==='/api/location'&&method==='POST'){
@@ -156,15 +126,12 @@ async function api(req,res,url){
  if(url.pathname==='/api/tag'&&method==='POST'){
   const g=gameOf(u),b=await body(req);if(!g||g.status!=='LIVE'||player(g,u.id)?.role!=='HUNTER')return json(res,403,{error:'Only the hunter can submit a tag.'});
   const target=player(g,String(b.targetId||''));if(!target||target.role!=='HIDER'||target.status!=='ACTIVE')return json(res,400,{error:'Invalid target.'});
-  const submitted=String(b.code||'').trim();if(!target.catchCode||submitted!==target.catchCode)return json(res,403,{error:'Incorrect catch code. Ask the hider for the code they see on their screen.'});
-  target.status='ELIMINATED';target.eliminatedAt=Date.now();incident(g,'TAG CONFIRMED',target.name+' confirmed caught by hunter.',u.name);
-  const ended=checkLastHider(g);if(!ended){save();broadcast(g);}
-  return json(res,200,{ok:true,gameEnded:ended,winner:g.winner||null});
+  const submitted=String(b.code||'').trim();
+  if(!target.catchCode||submitted!==target.catchCode)return json(res,403,{error:'Incorrect catch code. Ask the hider for the code they see on their screen.'});
+  target.status='ELIMINATED';incident(g,'TAG CONFIRMED',target.name+' confirmed caught by hunter.',u.name);save();broadcast(g);return json(res,200,{ok:true});
  }
  if(url.pathname==='/api/leave'&&method==='POST'){
-  const g=gameOf(u);if(g){if(g.status==='LOBBY')delete g.players[u.id];else{const p=player(g,u.id);if(p){p.status='LEFT';if(p.role==='HIDER')p.eliminatedAt=Date.now();}}
-   u.gameId=null;const ended=g.status==='LIVE'?checkLastHider(g):false;if(!ended){save();broadcast(g);}}
-  return json(res,200,{ok:true});
+  const g=gameOf(u);if(g){if(g.status==='LOBBY')delete g.players[u.id];else{const p=player(g,u.id);if(p)p.status='LEFT';}u.gameId=null;save();broadcast(g);}return json(res,200,{ok:true});
  }
  if(url.pathname==='/api/state'&&method==='GET'){const g=gameOf(u);return json(res,200,{game:publicGame(g,u.id)});}
  if(url.pathname==='/api/events'&&method==='GET'){
@@ -191,7 +158,7 @@ main{max-width:1440px;margin:auto;padding:34px clamp(16px,4vw,64px) 54px}.page{m
 .rules-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:22px 0}.rule{background:#0d1017;border:1px solid var(--line);border-radius:14px;padding:16px}.rule b{display:block;font-size:21px;color:var(--gold)}.rule span{color:var(--muted);font-size:12px}
 .hero{display:flex;justify-content:space-between;gap:18px;align-items:end;margin:8px 0 20px}.hero h1{font-size:clamp(34px,5vw,58px);line-height:.94;margin:10px 0}.sub{color:var(--muted)}#roundClock{text-align:right;background:#171a22;border:1px solid var(--line);padding:13px 18px;border-radius:14px;min-width:155px}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.stat,.panel{background:linear-gradient(145deg,#171a22,#101219);border:1px solid var(--line);border-radius:16px;padding:18px}.stat label{font-size:10px;color:var(--muted);letter-spacing:.13em}.stat b{display:block;font-size:27px;margin-top:4px}
-.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px}#map{height:560px;border-radius:12px;overflow:hidden}.panelhead{display:flex;justify-content:space-between;padding:0 0 14px;align-items:center}.side{display:flex;flex-direction:column;gap:14px}.side h3{font-size:11px;letter-spacing:.16em;margin:0 0 13px;color:var(--gold)}.row{display:flex;gap:8px}.row>*{flex:1}.wide{width:100%;margin-top:8px}.player,.feed{padding:11px 0;border-top:1px solid var(--line);font-size:12px}.pill{color:var(--gold);font-size:10px}.actions{display:flex;gap:8px;flex-wrap:wrap}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px}#map{height:560px;border-radius:12px;overflow:hidden}.panelhead{display:flex;justify-content:space-between;padding:0 0 14px;align-items:center}.side{display:flex;flex-direction:column;gap:14px}.side h3{font-size:11px;letter-spacing:.16em;margin:0 0 13px;color:var(--gold)}.muted{color:var(--muted);font-size:12px}.row{display:flex;gap:8px}.row>*{flex:1}.wide{width:100%;margin-top:8px}.player,.feed{padding:11px 0;border-top:1px solid var(--line);font-size:12px}.pill{color:var(--gold);font-size:10px}.actions{display:flex;gap:8px;flex-wrap:wrap}
 .zone-alert{display:none;margin:12px 0;padding:14px 16px;border:2px solid #ff343b;border-radius:12px;background:#4a1015;color:#fff;font-weight:900;font-size:15px}.zone-alert.on{display:block;animation:zonePulse 1s infinite alternate}@keyframes zonePulse{from{box-shadow:0 0 4px #e43d42}to{box-shadow:0 0 22px #e43d42}}
 .you-marker{width:26px;height:26px;border-radius:50%;background:#16C784;border:4px solid white;box-shadow:0 0 0 7px #16C78466,0 0 20px #16C784;position:relative}.you-marker:after{content:'YOU ARE HERE';position:absolute;left:30px;top:0;white-space:nowrap;background:#16C784;color:#071b12;padding:3px 7px;border-radius:4px;font:bold 10px Arial}.hunter-marker{width:25px;height:25px;border-radius:50%;background:#005BFF;border:4px solid white;box-shadow:0 0 0 7px #005BFF66,0 0 18px #005BFF}.hider-marker{width:15px;height:15px;border-radius:50%;background:#e3b65f;border:3px solid white;box-shadow:0 0 0 4px #e3b65f55}
 .good{color:var(--green)}.warn{color:#ffbd72}footer{color:#747b8a;font-size:10px;text-align:center;margin-top:30px;letter-spacing:.12em}
@@ -219,28 +186,6 @@ main{max-width:1440px;margin:auto;padding:34px clamp(16px,4vw,64px) 54px}.page{m
 .rr-shadow{width:90px;height:14px;margin:10px auto 0;border-radius:50%;background:#0008;filter:blur(4px);animation:rrShadow 2.4s ease-in-out infinite}
 @keyframes rrShadow{0%,100%{transform:scale(1);opacity:.8}50%{transform:scale(.7);opacity:.45}}
 @media(max-width:600px){.crew-wrap{transform:scale(.8);margin-bottom:-14px}}
-
-/* End-of-game animations and rankings; existing role-reveal animation above is unchanged. */
-#deathScreen,#resultScreen{position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;padding:22px;text-align:center;animation:screenFade .45s ease both}
-#deathScreen{background:radial-gradient(ellipse at center,#681018 0,#120609 55%,#030304 100%)}
-#resultScreen.hunters{background:radial-gradient(ellipse at center,#65121a 0,#150609 60%,#030304 100%)}
-#resultScreen.hiders{background:radial-gradient(ellipse at center,#075b4c 0,#071b19 60%,#030504 100%)}
-#resultScreen.neutral{background:radial-gradient(ellipse at center,#333744 0,#11131a 60%,#030304 100%)}
-@keyframes screenFade{from{opacity:0}to{opacity:1}}
-.end-card{max-width:550px;width:100%;animation:endPop .7s cubic-bezier(.2,1.4,.4,1) both}
-@keyframes endPop{from{opacity:0;transform:scale(.65) translateY(30px)}to{opacity:1;transform:scale(1) translateY(0)}}
-.end-symbol{font-size:clamp(75px,17vw,125px);line-height:1;margin-bottom:20px;animation:endPulse 1.5s ease-in-out infinite alternate}
-@keyframes endPulse{from{transform:scale(.94);filter:brightness(.8)}to{transform:scale(1.08);filter:brightness(1.3)}}
-.end-card h2{font-size:clamp(38px,10vw,76px);line-height:.9;letter-spacing:-.055em;margin:15px 0}
-.end-card p{color:#d4d7df;font-size:16px}
-.end-kicker{font-size:11px;letter-spacing:.28em;font-weight:900;color:var(--gold)}
-#deathScreen .end-card h2,#resultScreen.hunters h2{color:#ff515b;text-shadow:0 0 30px #ed3d4588}
-#resultScreen.hiders h2{color:#36e0b6;text-shadow:0 0 30px #1fbfa888}
-#resultScreen.neutral h2{color:#e8bd72}
-.end-card button{margin-top:20px;min-width:190px}
-.rankings{margin:22px auto 0;max-width:440px;text-align:left;background:#08090d88;border:1px solid #ffffff22;border-radius:14px;padding:12px 16px;max-height:32vh;overflow:auto}
-.rank-row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #ffffff18;font-size:13px}
-.rank-row:last-child{border:0}
 </style></head><body><header class="top"><div class="top-left"><button class="navbtn" onclick="navTo('join')">JOIN GAME</button></div><div><div class="brand">MAN<span>HUNT</span></div><div class="edition">THE VEGAS INCIDENT</div></div><div class="top-right"><button class="navbtn create" onclick="navTo('create')">CREATE GAME</button></div></header><main>
 <section id="homePage" class="page landing">
  <div class="eyebrow">FIELD OPERATIONS · AFTER DARK</div><h1>ONE CITY.<br><em>NO ALIBIS.</em></h1>
@@ -265,15 +210,8 @@ main{max-width:1440px;margin:auto;padding:34px clamp(16px,4vw,64px) 54px}.page{m
  <div class="panel"><h3>INCIDENT FEED</h3><div id="feed" class="muted">No incidents yet.</div></div></aside></div>
 </section><footer></footer></main>
 <div id="roleReveal" class="rr hidden" role="dialog" aria-modal="true" aria-labelledby="rrTitle"><div class="rr-lights"></div><div class="rr-card"><div class="crew-wrap"><div class="crew"><div class="leg l"></div><div class="leg r"></div><div class="bp"></div><div class="body"><div class="visor"></div></div></div><div class="rr-shadow"></div></div><h2 id="rrTitle"></h2><p id="rrSub"></p><div id="rrTimer"></div><button id="rrBtn" type="button">LET'S GO</button></div></div>
-<div id="deathScreen" class="hidden" role="dialog" aria-modal="true">
- <div class="end-card"><div class="end-kicker">PLAYER ELIMINATED</div><div class="end-symbol">✕</div><h2>YOU'RE OUT.</h2><p>Your run in the Vegas Incident is over.</p><button type="button" onclick="dismissDeath()">CONTINUE</button></div>
-</div>
-<div id="resultScreen" class="hidden" role="dialog" aria-modal="true">
- <div class="end-card"><div class="end-kicker" id="resultKicker">THE VEGAS INCIDENT</div><div class="end-symbol" id="resultSymbol">★</div><h2 id="resultTitle">GAME OVER</h2><p id="resultDescription"></p><div id="rankings" class="rankings"></div><button type="button" onclick="dismissResult()">VIEW FINAL RESULTS</button></div>
-</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
 let me=null,G=null,map=null,markers={},circle=null,watch=null,gpsTimer=null,latestPosition=null,lastHiderPing=0,events=null,zoneAlertTimer=null;
-let deathShownFor=null,resultShownFor=null,resultTimer=null;
 const $=x=>document.getElementById(x);
 async function req(url,data){let r=await fetch(url,{method:data?'POST':'GET',headers:data?{'content-type':'application/json'}:{},body:data?JSON.stringify(data):undefined});let j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j}
 async function boot(){
@@ -302,7 +240,7 @@ function ensureMap(){
 function showLobby(){$('lobbyControls').classList.remove('hidden');$('hostControls').classList.add('hidden');$('liveControls').classList.add('hidden');$('leaveControls').classList.add('hidden')}
 async function hostGame(){try{let pos=await gpsOnce();let j=await req('/api/host',{name:$('gameTitle').value||'Vegas Incident',lat:pos.coords.latitude,lng:pos.coords.longitude,radius:Number($('radius').value)||1000});G=j.game;navTo('game');render(G);connectEvents()}catch(e){alert(e.message)}}
 async function joinGame(){try{let j=await req('/api/join',{code:$('joinCode').value.trim().toUpperCase(),callsign:$('callsign').value||me.name});G=j.game;navTo('game');render(G);connectEvents()}catch(e){alert(e.message)}}
-function gpsOnce(){return new Promise((resolve,reject)=>{if(!navigator.geolocation)return reject(Error('GPS unavailable'));navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:15000})}}
+function gpsOnce(){return new Promise((resolve,reject)=>{if(!navigator.geolocation)return reject(Error('GPS unavailable'));navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:15000})})}
 async function startGame(){try{let j=await req('/api/start',{});render(j.game)}catch(e){alert(e.message)}}
 function distanceMeters(a,b){const r=x=>x*Math.PI/180,R=6371000,d1=r(b.lat-a.lat),d2=r(b.lng-a.lng),q=Math.sin(d1/2)**2+Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(d2/2)**2;return 2*R*Math.asin(Math.sqrt(q));}
 function stopGPS(){if(watch!==null)navigator.geolocation.clearWatch(watch);if(gpsTimer!==null)clearInterval(gpsTimer);watch=null;gpsTimer=null;latestPosition=null;}
@@ -321,42 +259,8 @@ async function tagPlayer(targetId){const code=prompt('Ask the caught hider for t
 async function report(){let s=prompt('Sighting details (do not approach or follow anyone):');if(s)try{await req('/api/report',{type:'SIGHTING',message:s})}catch(e){alert(e.message)}}
 async function leave(){if(!confirm('Leave this game?'))return;stopGPS();try{await req('/api/leave',{});if(events){events.close();events=null;}G=null;markers&&Object.values(markers).forEach(m=>{try{map.removeLayer(m)}catch{}});markers={};if(circle){try{map.removeLayer(circle)}catch{}circle=null;}$('gameName').textContent='Create a lobby or join with a code.';$('timer').textContent='18:00';$('active').textContent='—';$('hiders').textContent='—';$('out').textContent='—';$('role').textContent='—';$('mapMode').textContent='LOBBY';$('roster').textContent='No players yet.';$('feed').textContent='No incidents yet.';$('zoneAlert').classList.remove('on');$('zoneAlert').textContent='';render(null);navTo('home');}catch(e){alert('Could not leave game: '+e.message)}}
 function connectEvents(){if(events)events.close();events=new EventSource('/api/events');events.onmessage=e=>{let j=JSON.parse(e.data);if(j.game){G=j.game;render(G)}}}
-function showDeath(){
- if(!G||deathShownFor===G.id)return;
- deathShownFor=G.id;$('deathScreen').classList.remove('hidden');
-}
-function dismissDeath(){
- $('deathScreen').classList.add('hidden');
- if(resultTimer){clearTimeout(resultTimer);resultTimer=null;}
- if(G?.status==='FINISHED')showResult();
-}
-function showResult(){
- if(!G||G.status!=='FINISHED'||resultShownFor===G.id)return;
- if(resultTimer){clearTimeout(resultTimer);resultTimer=null;}
- resultShownFor=G.id;
- const winner=G.winner||'NONE',screen=$('resultScreen');
- screen.className=winner==='HUNTERS'?'hunters':winner==='HIDERS'?'hiders':'neutral';
- $('resultKicker').textContent=winner==='NONE'?'GAME CLOSED':'FINAL RESULT';
- $('resultSymbol').textContent=winner==='HUNTERS'?'✕':winner==='HIDERS'?'★':'—';
- $('resultTitle').textContent=winner==='HUNTERS'?'HUNTERS WIN':winner==='HIDERS'?'HIDERS WIN':'GAME OVER';
- $('resultDescription').textContent=winner==='HUNTERS'?'Every hider has been eliminated.':winner==='HIDERS'?'At least one hider survived the full 18-minute round.':'The host ended the game.';
- const rows=(G.rankings||[]).slice().sort((a,b)=>(a.rank||999)-(b.rank||999));
- $('rankings').innerHTML=rows.map(p=>'<div class="rank-row"><span>#'+(p.rank||'—')+' · '+esc(p.name)+' <small>('+esc(p.role||'PLAYER')+')</small></span><b>'+esc(p.status)+'</b></div>').join('')||'<div class="rank-row">No ranking data available.</div>';
- screen.classList.remove('hidden');
-}
-function scheduleResult(){
- if(!G||G.status!=='FINISHED'||resultShownFor===G.id||resultTimer)return;
- const gameId=G.id;
- if(deathShownFor===gameId&&!$('deathScreen').classList.contains('hidden')){
-  resultTimer=setTimeout(()=>{resultTimer=null;if(G?.id===gameId&&G.status==='FINISHED'){$('deathScreen').classList.add('hidden');showResult();}},2500);
- }else showResult();
-}
-function dismissResult(){$('resultScreen').classList.add('hidden');}
 function render(g){
  if(!g){
-  if(resultTimer){clearTimeout(resultTimer);resultTimer=null;}
-  deathShownFor=null;resultShownFor=null;
-  $('deathScreen').classList.add('hidden');$('resultScreen').classList.add('hidden');
   $('roleReveal').classList.add('hidden');$('roundClock').classList.add('hidden');$('statsBar').classList.add('hidden');$('mapPanel').classList.add('hidden');$('hidingNotice').classList.add('hidden');
   G=null;$('zoneAlert').classList.remove('on');$('zoneAlert').textContent='';$('gameName').textContent='Create a lobby or join with a code.';
   $('timer').textContent='18:00';$('active').textContent='—';$('hiders').textContent='—';$('out').textContent='—';$('role').textContent='—';
@@ -365,16 +269,14 @@ function render(g){
   for(const m of Object.values(markers)){if(map)map.removeLayer(m)}markers={};if(circle&&map){map.removeLayer(circle);circle=null;}
   return;
  }
- G=g;navTo('game');maybeReveal(g);
- if(g.me?.role==='HIDER'&&g.me.status==='ELIMINATED')showDeath();
- if(g.status==='FINISHED')scheduleResult();
- $('gameName').textContent=g.name+' · CODE '+g.code;$('code').textContent=g.code;$('mapMode').textContent=g.status;$('mapMode2').textContent=g.status;
+ G=g;navTo('game');maybeReveal(g);$('gameName').textContent=g.name+' · CODE '+g.code;$('code').textContent=g.code;$('mapMode').textContent=g.status;$('mapMode2').textContent=g.status;
  $('role').textContent=g.me?.role==='HUNTER'?'HUNTER':g.me?.role==='HIDER'?'HIDER':'—';
  $('active').textContent=g.players.filter(p=>p.status==='ACTIVE').length;$('hiders').textContent=g.players.filter(p=>p.role==='HIDER'&&p.status==='ACTIVE').length;$('out').textContent=g.players.filter(p=>p.status!=='ACTIVE').length;
  const started=['LIVE','PAUSED','FINISHED'].includes(g.status),isHiding=g.status==='HIDING';
  $('mapPanel').classList.toggle('hidden',!started);$('statsBar').classList.toggle('hidden',!started);$('hidingNotice').classList.toggle('hidden',!isHiding);
  $('roundClock').classList.toggle('hidden',!started);
- if(isHiding&&g.hideEndsAt){$('clockLabel').textContent='HIDING PHASE';}else $('clockLabel').textContent='ROUND TIME REMAINING';
+ if(isHiding&&g.hideEndsAt){$('clockLabel').textContent='HIDING PHASE';}
+ else $('clockLabel').textContent='ROUND TIME REMAINING';
  const alertBox=$('zoneAlert');if(g.me?.role==='HIDER'&&g.me.outsideSince&&g.status==='LIVE'){const remaining=Math.max(0,180-Math.floor((Date.now()-g.me.outsideSince)/1000));alertBox.classList.add('on');alertBox.textContent='YOU ARE OUTSIDE THE SAFE ZONE · RETURN NOW · ELIMINATION IN '+Math.floor(remaining/60)+':'+String(remaining%60).padStart(2,'0');}else{alertBox.classList.remove('on');alertBox.textContent='';}
  $('lobbyControls').classList.toggle('hidden',g.status!=='LOBBY');$('hostControls').classList.toggle('hidden',!(g.status==='LOBBY'&&g.hostId===me.id));
  $('liveControls').classList.toggle('hidden',!['HIDING','LIVE','PAUSED'].includes(g.status));$('leaveControls').classList.remove('hidden');
@@ -421,7 +323,7 @@ $('rrBtn').onclick=()=>$('roleReveal').classList.add('hidden');
 setInterval(updateRevealTimer,1000);
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function act(url,data){try{await req(url,data);location.reload()}catch(e){alert(e.message)}}
-setInterval(()=>{if(G?.status==='HIDING'&&G.hideEndsAt){const sec=Math.max(0,Math.ceil((G.hideEndsAt-Date.now())/1000));$('hideTimer').textContent=String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');$('timer').textContent=$('hideTimer').textContent;}if(G&&G.roundStartedAt&&G.roundEndsAt){const clockNow=G.pausedAt||G.endedAt||Date.now();const sec=Math.max(0,Math.ceil((G.roundEndsAt-clockNow)/1000));$('timer').textContent=String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');}if(G&&G.me?.role==='HIDER'&&G.me.outsideSince&&G.status==='LIVE'){const left=Math.max(0,180-Math.floor((Date.now()-G.me.outsideSince)/1000));$('zoneAlert').classList.add('on');$('zoneAlert').textContent='YOU ARE OUTSIDE THE SAFE ZONE · RETURN NOW · ELIMINATION IN '+Math.floor(left/60)+':'+String(left%60).padStart(2,'0');}},1000);
+setInterval(()=>{if(G?.status==='HIDING'&&G.hideEndsAt){const sec=Math.max(0,Math.ceil((G.hideEndsAt-Date.now())/1000));$('hideTimer').textContent=String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');$('timer').textContent=$('hideTimer').textContent;}if(G&&G.roundStartedAt&&G.roundEndsAt){const clockNow=G.pausedAt||Date.now();const sec=Math.max(0,Math.ceil((G.roundEndsAt-clockNow)/1000));$('timer').textContent=String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');}if(G&&G.me?.role==='HIDER'&&G.me.outsideSince&&G.status==='LIVE'){const left=Math.max(0,180-Math.floor((Date.now()-G.me.outsideSince)/1000));$('zoneAlert').classList.add('on');$('zoneAlert').textContent='YOU ARE OUTSIDE THE SAFE ZONE · RETURN NOW · ELIMINATION IN '+Math.floor(left/60)+':'+String(left%60).padStart(2,'0');}},1000);
 boot();
 </script></body></html>`;
 const server=http.createServer(async(req,res)=>{
@@ -431,9 +333,4 @@ const server=http.createServer(async(req,res)=>{
  if(req.method!=='GET'){res.writeHead(405);return res.end('Method not allowed');}
  res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':"default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' https: data: blob:; connect-src 'self' https:;"});res.end(PAGE);
 });
-server.listen(PORT,HOST,()=>console.log(`MANHUNT running on http://${HOST}:${PORT}`));'''
-
-# Save as plain text without altering the JavaScript source.
-out = Path("/mnt/data/manhunt-exe-updated.txt")
-out.write_text(content, encoding="utf-8")
-print(f"Created {out.name} ({out.stat().st_size:,} bytes, {content.count(chr(10))+1:,} lines).")
+server.listen(PORT,HOST,()=>console.log(`MANHUNT running on http://${HOST}:${PORT}`));
